@@ -184,7 +184,7 @@ export class SessionLauncher extends EventEmitter {
     };
 
     this.sessions.set(sessionId, session);
-    this.emit('session-status-changed', session);
+    this.emitStatus(session);
 
     // 4. Build arguments and spawn child process
     try {
@@ -203,12 +203,12 @@ export class SessionLauncher extends EventEmitter {
       // 5. Attach streams and process monitoring
       this.attachProcessMonitoring(session, childHandle);
 
-      this.emit('session-status-changed', session);
+      this.emitStatus(session);
       return { success: true, sessionId };
     } catch (err: any) {
       session.status = 'error';
       session.error = err?.message || String(err);
-      this.emit('session-status-changed', session);
+      this.emitStatus(session);
       this.pruneCompletedSessions(sessionId);
       return { success: false, error: session.error };
     }
@@ -245,7 +245,7 @@ export class SessionLauncher extends EventEmitter {
     }
 
     session.status = 'stopping';
-    this.emit('session-status-changed', session);
+    this.emitStatus(session);
 
     const stopPromise = new Promise<OperationResult>((resolve, reject) => {
       session.stopDeferred = { resolve, reject };
@@ -267,7 +267,7 @@ export class SessionLauncher extends EventEmitter {
       if (session.status === 'stopping') {
         const warning = `[SYSTEM] Process ${session.pid} did not exit within ${this.killEscalationDelayMs}ms; escalating to SIGKILL.`;
         session.logBuffer.push(warning);
-        this.emit('session-log', { sessionId: session.sessionId, text: warning } as SessionLogEntry);
+        this.emitLog({ sessionId: session.sessionId, text: warning } as SessionLogEntry);
 
         try {
           if (session.childHandle) {
@@ -336,6 +336,23 @@ export class SessionLauncher extends EventEmitter {
   }
 
   /**
+   * Convenience alias for getSession
+   */
+  public getActiveSession(sessionId: string): ActiveSession | undefined {
+    return this.getSession(sessionId);
+  }
+
+  /**
+   * Stops all running sessions
+   */
+  public async stopAllSessions(): Promise<void> {
+    const active = this.getActiveSessions();
+    for (const sess of active) {
+      await this.stopSession(sess.sessionId);
+    }
+  }
+
+  /**
    * Cleans up all running sessions, cancels timers, and detaches listeners.
    */
   public dispose(): void {
@@ -374,12 +391,22 @@ export class SessionLauncher extends EventEmitter {
     this.removeAllListeners();
   }
 
+  private emitStatus(session: ActiveSession): void {
+    this.emit('session-status-changed', session);
+    this.emit('sessionStatusChanged', session);
+  }
+
+  private emitLog(entry: SessionLogEntry): void {
+    this.emit('session-log', entry);
+    this.emit('sessionLog', entry);
+  }
+
   // --- Private Stream and Lifecycle Helpers ---
 
   private attachProcessMonitoring(session: InternalSession, child: IChildProcessHandle): void {
     const handleLogLine = (line: string) => {
       session.logBuffer.push(line);
-      this.emit('session-log', {
+      this.emitLog({
         sessionId: session.sessionId,
         text: line,
       } as SessionLogEntry);
@@ -433,7 +460,7 @@ export class SessionLauncher extends EventEmitter {
         }
       }
 
-      this.emit('session-status-changed', session);
+      this.emitStatus(session);
       this.pruneCompletedSessions(session.sessionId);
     };
 
@@ -448,8 +475,8 @@ export class SessionLauncher extends EventEmitter {
       session.status = 'error';
       session.error = err.message;
       session.logBuffer.push(`[ERROR] Process error: ${err.message}`);
-      this.emit('session-log', { sessionId: session.sessionId, text: `[ERROR] ${err.message}` } as SessionLogEntry);
-      this.emit('session-status-changed', session);
+      this.emitLog({ sessionId: session.sessionId, text: `[ERROR] ${err.message}` } as SessionLogEntry);
+      this.emitStatus(session);
       session.stopDeferred?.reject(err);
       session.stopDeferred = undefined;
       this.pruneCompletedSessions(session.sessionId);

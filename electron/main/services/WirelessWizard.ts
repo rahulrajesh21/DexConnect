@@ -791,8 +791,15 @@ export class WirelessWizard extends EventEmitter {
     return { success: true };
   }
 
-  public async disconnectWireless(address?: string): Promise<OperationResult> {
-    const res = await this.adb.disconnect(address);
+  public async disconnectWireless(
+    addressOrIp?: string,
+    portArg?: number
+  ): Promise<OperationResult> {
+    let target = addressOrIp;
+    if (addressOrIp && !addressOrIp.includes(':') && portArg) {
+      target = `${addressOrIp}:${portArg}`;
+    }
+    const res = await this.adb.disconnect(target);
     if (this.deviceManager) {
       void this.deviceManager.refresh().catch(() => {});
     }

@@ -53,8 +53,10 @@ export class MockScrcpyRunner implements IScrcpyProcessRunner {
   private allArgs: string[][] = [];
   private activeHandles: Map<number, MockChildProcessHandle> = new Map();
   private allHandles: Map<number, MockChildProcessHandle> = new Map();
+  private handleArgs: Map<number, string[]> = new Map();
   private scrcpyInstalled = true;
-  private scrcpyVersion = '5.0.1 (Mock)';
+  private scrcpyVersion = 'scrcpy 5.0.1';
+  public simulateStubbornProcess = false;
 
   public async checkScrcpyInstalled(): Promise<ScrcpyInstallationInfo> {
     if (!this.scrcpyInstalled) {
@@ -67,6 +69,43 @@ export class MockScrcpyRunner implements IScrcpyProcessRunner {
     };
   }
 
+  public async checkVersion(_path: string): Promise<string> {
+    return this.scrcpyVersion;
+  }
+
+  public async isAvailable(path: string): Promise<boolean> {
+    if (path.includes('invalid') || !this.scrcpyInstalled) return false;
+    return true;
+  }
+
+  public async spawn(_path: string, args: string[]): Promise<MockChildProcessHandle> {
+    return this.spawnSession(args) as Promise<MockChildProcessHandle>;
+  }
+
+  public isRunning(pid: number): boolean {
+    const handle = this.activeHandles.get(pid);
+    return handle ? !handle.killed : false;
+  }
+
+  public getSpawnedProcesses(): Array<{ pid: number; args: string[]; emitStdout: (s: string) => void; emitExit: (c: number) => void }> {
+    return Array.from(this.allHandles.values()).map((h) => ({
+      pid: h.pid,
+      args: this.handleArgs.get(h.pid) || this.lastArgs,
+      emitStdout: (s: string) => {
+        h.stdout.write(s);
+        h.stdout.emit('data', Buffer.from(s));
+      },
+      emitExit: (c: number) => {
+        h.killed = true;
+        h.exitCode = c;
+        h.stdout.end();
+        h.stderr.end();
+        h.emit('exit', c);
+        h.emit('close', c);
+      },
+    }));
+  }
+
   public async spawnSession(
     args: string[],
     _options?: { env?: NodeJS.ProcessEnv }
@@ -75,7 +114,11 @@ export class MockScrcpyRunner implements IScrcpyProcessRunner {
     this.allArgs.push([...args]);
 
     const pid = this.nextPid++;
+    this.handleArgs.set(pid, [...args]);
     const handle = new MockChildProcessHandle(pid);
+    if (this.simulateStubbornProcess) {
+      handle.ignoreSigterm = true;
+    }
     this.activeHandles.set(pid, handle);
     this.allHandles.set(pid, handle);
 

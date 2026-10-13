@@ -94,9 +94,15 @@ export const DEFAULT_MOCK_DEVICES: MockDeviceState[] = [
 
 export class MockAdbExecutor implements IAdbExecutor {
   private devices: Map<string, MockDeviceState> = new Map();
+  private pairedIps: Set<string> = new Set();
   private adbInstalled = true;
   private adbPath = '/opt/homebrew/bin/adb';
   private adbVersion = '1.0.41 (Mock)';
+  public commandHistory: string[] = [];
+  public simulateConnectFailure = false;
+  public simulateDaemonStartBanner = false;
+  public simulateCorruptedBattery = false;
+  public simulateCorruptedGetprop = false;
 
   constructor(initialDevices?: MockDeviceState[]) {
     this.reset(initialDevices);
@@ -107,6 +113,12 @@ export class MockAdbExecutor implements IAdbExecutor {
    */
   public reset(initialDevices = DEFAULT_MOCK_DEVICES): void {
     this.devices.clear();
+    this.pairedIps.clear();
+    this.commandHistory = [];
+    this.simulateConnectFailure = false;
+    this.simulateDaemonStartBanner = false;
+    this.simulateCorruptedBattery = false;
+    this.simulateCorruptedGetprop = false;
     for (const d of initialDevices) {
       this.devices.set(d.raw.serial, JSON.parse(JSON.stringify(d)));
     }
@@ -124,16 +136,23 @@ export class MockAdbExecutor implements IAdbExecutor {
   }
 
   public async getDevices(): Promise<DeviceRawRecord[]> {
+    this.commandHistory.push('adb devices -l');
     return Array.from(this.devices.values()).map((d) => ({ ...d.raw }));
   }
 
   public async getProp(serial: string, prop: string): Promise<string> {
+    this.commandHistory.push(`adb -s ${serial} shell getprop ${prop}`);
+    if (this.simulateCorruptedGetprop) return 'null\x00corrupt';
     const dev = this.devices.get(serial);
     if (!dev) return '';
     return dev.props[prop] || '';
   }
 
   public async getBatteryInfo(serial: string): Promise<BatteryInfo> {
+    this.commandHistory.push(`adb -s ${serial} shell dumpsys battery`);
+    if (this.simulateCorruptedBattery) {
+      return { level: 50, scale: 100, status: 2, isCharging: false, powerSource: 'battery' };
+    }
     const dev = this.devices.get(serial);
     if (!dev) {
       throw new Error(`Device '${serial}' not found`);
@@ -142,12 +161,14 @@ export class MockAdbExecutor implements IAdbExecutor {
   }
 
   public async getDeviceIp(serial: string): Promise<string | null> {
+    this.commandHistory.push(`adb -s ${serial} shell ip route`);
     const dev = this.devices.get(serial);
     if (!dev) return null;
     return dev.ipAddress;
   }
 
   public async switchTcpip(serial: string, port: number): Promise<AdbCommandResult> {
+    this.commandHistory.push(`adb -s ${serial} tcpip ${port}`);
     const dev = this.devices.get(serial);
     if (!dev) {
       return { success: false, output: `error: device '${serial}' not found` };
@@ -160,6 +181,10 @@ export class MockAdbExecutor implements IAdbExecutor {
   }
 
   public async connect(address: string): Promise<AdbCommandResult> {
+    this.commandHistory.push(`adb connect ${address}`);
+    if (this.simulateConnectFailure) {
+      return { success: false, output: `failed to connect to ${address}: Connection refused` };
+    }
     const targetAddress = address.includes(':') ? address : `${address}:5555`;
     const targetIp = targetAddress.split(':')[0];
 
@@ -179,14 +204,22 @@ export class MockAdbExecutor implements IAdbExecutor {
         raw: {
           serial: newWifiSerial,
           state: 'device',
-          product: matchingDevice.raw.product,
-          model: matchingDevice.raw.model,
-          device: matchingDevice.raw.device,
+          product: matchingDevice?.raw.product || 'paired-device',
+          model: matchingDevice?.raw.model || 'Wireless Device',
+          device: matchingDevice?.raw.device || 'paired-device',
           transportId: (this.devices.size + 1).toString(),
         },
-        props: { ...matchingDevice.props },
-        battery: { ...matchingDevice.battery, powerSource: 'battery', isCharging: false },
-        ipAddress: matchingDevice.ipAddress,
+        props: matchingDevice
+          ? { ...matchingDevice.props }
+          : {
+              'ro.product.manufacturer': 'generic',
+              'ro.product.model': 'Wireless Device',
+              'ro.build.version.release': '14',
+            },
+        battery: matchingDevice
+          ? { ...matchingDevice.battery, powerSource: 'battery', isCharging: false }
+          : { level: 85, scale: 100, status: 2, isCharging: false, powerSource: 'battery' },
+        ipAddress: targetIp,
         tcpipPort: 5555,
       };
       this.devices.set(newWifiSerial, wifiDevice);
@@ -201,7 +234,9 @@ export class MockAdbExecutor implements IAdbExecutor {
 
   public async disconnect(address?: string): Promise<AdbCommandResult> {
     if (address) {
-      if (this.devices.has(address)) {
+      const target = address.includes(':') ? address : `${address}:5555`;
+      if (this.devices.has(target) || this.devices.has(address)) {
+        this.devices.delete(target);
         this.devices.delete(address);
         return { success: true, output: `disconnected ${address}` };
       }
@@ -225,6 +260,8 @@ export class MockAdbExecutor implements IAdbExecutor {
         output: 'Failed: Wrong password or connection closed.',
       };
     }
+    const ip = addressWithPort.split(':')[0];
+    this.pairedIps.add(ip);
     return {
       success: true,
       output: `Successfully paired to ${addressWithPort} [guid: mock-pairing-guid-${Date.now()}]`,
@@ -259,5 +296,29 @@ export class MockAdbExecutor implements IAdbExecutor {
 
   public simulateAdbInstalled(installed: boolean): void {
     this.adbInstalled = installed;
+  }
+
+  public setMockDevice(device: MockDeviceState): void {
+    this.simulateDeviceConnect(device);
+  }
+
+  public removeMockDevice(serial: string): void {
+    this.simulateDeviceDisconnect(serial);
+  }
+
+  public getCommandHistory(): string[] {
+    return [...this.commandHistory];
+  }
+
+  public async raw(args: string[]): Promise<any> {
+    this.commandHistory.push(`adb ${args.join(' ')}`);
+    const output = `mock raw: adb ${args.join(' ')} Android Debug Bridge version 1.0.41`;
+    return {
+      exitCode: 0,
+      stdout: output,
+      stderr: '',
+      success: true,
+      output,
+    };
   }
 }

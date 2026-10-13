@@ -242,10 +242,31 @@ export class DeviceManager extends EventEmitter {
   }
 
   /**
+   * Convenience alias for getDeviceBySerial
+   */
+  public getDevice(serial: string): DeviceInfo | undefined {
+    return this.getDeviceBySerial(serial);
+  }
+
+  /**
    * Triggers an immediate poll tick. If forceBattery is true, ignores battery throttling.
    */
   public async refresh(forceBattery = false): Promise<DeviceInfo[]> {
     return this.pollTick(forceBattery, true);
+  }
+
+  /**
+   * Alias for refresh for backward compatibility
+   */
+  public async refreshDevices(forceBattery = false): Promise<DeviceInfo[]> {
+    return this.refresh(forceBattery);
+  }
+
+  /**
+   * Alias for stop for backward compatibility
+   */
+  public stopPolling(): void {
+    this.stop();
   }
 
   /**
@@ -310,6 +331,7 @@ export class DeviceManager extends EventEmitter {
         }
 
         this.emit('devices-updated', this.getDevices());
+        this.emit('devicesUpdated', this.getDevices());
       }
 
       this.consecutiveErrors = 0;
