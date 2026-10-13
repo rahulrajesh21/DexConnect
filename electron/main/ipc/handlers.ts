@@ -4,6 +4,7 @@ import type { IAdbExecutor } from '../adapters/IAdbExecutor';
 import type { IScrcpyProcessRunner } from '../adapters/IScrcpyProcessRunner';
 import type { DeviceManager } from '../services/DeviceManager';
 import type { SessionLauncher } from '../services/SessionLauncher';
+import type { WirelessWizard } from '../services/WirelessWizard';
 import type {
   DeviceInfo,
   LaunchConfig,
@@ -24,6 +25,7 @@ export interface HandlerContext {
   scrcpyRunner?: IScrcpyProcessRunner;
   deviceManager?: DeviceManager;
   sessionLauncher?: SessionLauncher;
+  wirelessWizard?: WirelessWizard;
 }
 
 export function registerIpcHandlers(context: HandlerContext): void {
@@ -31,6 +33,7 @@ export function registerIpcHandlers(context: HandlerContext): void {
   const scrcpy = context.scrcpyRunner || context.scrcpy;
   const deviceManager = context.deviceManager;
   const sessionLauncher = context.sessionLauncher;
+  const wirelessWizard = context.wirelessWizard;
 
   if (!adb || !scrcpy) {
     throw new Error('registerIpcHandlers requires both adb and scrcpy adapters');
@@ -46,6 +49,7 @@ export function registerIpcHandlers(context: HandlerContext): void {
     DEXCONNECT_CHANNELS.MIGRATE_WIRELESS,
     DEXCONNECT_CHANNELS.PAIR_WIRELESS_DEVICE,
     DEXCONNECT_CHANNELS.CONNECT_WIRELESS_DEVICE,
+    DEXCONNECT_CHANNELS.DISCONNECT_WIRELESS,
     DEXCONNECT_CHANNELS.GET_RECENT_WIRELESS_DEVICES,
   ];
 
@@ -171,6 +175,9 @@ export function registerIpcHandlers(context: HandlerContext): void {
   ipcMain.handle(
     DEXCONNECT_CHANNELS.MIGRATE_WIRELESS,
     async (_event, serial: string): Promise<MigrateWirelessResult> => {
+      if (wirelessWizard) {
+        return await wirelessWizard.migrateToWifi(serial);
+      }
       const ip = await adb.getDeviceIp(serial);
       if (!ip) {
         return { success: false, error: 'Failed to detect device IP address' };
@@ -191,12 +198,42 @@ export function registerIpcHandlers(context: HandlerContext): void {
   // 7. PAIR_WIRELESS_DEVICE
   ipcMain.handle(
     DEXCONNECT_CHANNELS.PAIR_WIRELESS_DEVICE,
-    async (_event, payload: PairWirelessPayload): Promise<OperationResult> => {
-      const pairRes = await adb.pair(`${payload.ip}:${payload.pairingPort}`, payload.code);
+    async (
+      _event,
+      payloadOrIp: PairWirelessPayload | string,
+      pairingPort?: number,
+      code?: string,
+      connectPort?: number
+    ): Promise<OperationResult> => {
+      if (wirelessWizard) {
+        const res = await wirelessWizard.pairDevice(
+          payloadOrIp,
+          pairingPort,
+          code,
+          connectPort
+        );
+        return { success: res.success, error: res.error };
+      }
+      let ip: string;
+      let pPort: number;
+      let cCode: string;
+      let cPort = 5555;
+      if (typeof payloadOrIp === 'object' && payloadOrIp !== null) {
+        ip = payloadOrIp.ip;
+        pPort = payloadOrIp.pairingPort;
+        cCode = payloadOrIp.code;
+        cPort = payloadOrIp.connectPort ?? 5555;
+      } else {
+        ip = payloadOrIp;
+        pPort = pairingPort!;
+        cCode = code!;
+        cPort = connectPort ?? 5555;
+      }
+      const pairRes = await adb.pair(`${ip}:${pPort}`, cCode);
       if (!pairRes.success) {
         return { success: false, error: pairRes.output };
       }
-      const connRes = await adb.connect(`${payload.ip}:${payload.connectPort}`);
+      const connRes = await adb.connect(`${ip}:${cPort}`);
       return {
         success: connRes.success,
         error: connRes.success ? undefined : connRes.output,
@@ -207,8 +244,12 @@ export function registerIpcHandlers(context: HandlerContext): void {
   // 8. CONNECT_WIRELESS_DEVICE
   ipcMain.handle(
     DEXCONNECT_CHANNELS.CONNECT_WIRELESS_DEVICE,
-    async (_event, address: string): Promise<OperationResult> => {
-      const connRes = await adb.connect(address);
+    async (_event, addressOrIp: string, port?: number): Promise<OperationResult> => {
+      if (wirelessWizard) {
+        return await wirelessWizard.connectWireless(addressOrIp, port);
+      }
+      const target = port !== undefined ? `${addressOrIp}:${port}` : addressOrIp;
+      const connRes = await adb.connect(target);
       return {
         success: connRes.success,
         error: connRes.success ? undefined : connRes.output,
@@ -216,8 +257,29 @@ export function registerIpcHandlers(context: HandlerContext): void {
     }
   );
 
-  // 9. GET_RECENT_WIRELESS_DEVICES
-  ipcMain.handle(DEXCONNECT_CHANNELS.GET_RECENT_WIRELESS_DEVICES, async (): Promise<RecentWirelessDevice[]> => {
-    return [];
-  });
+  // 9. DISCONNECT_WIRELESS
+  ipcMain.handle(
+    DEXCONNECT_CHANNELS.DISCONNECT_WIRELESS,
+    async (_event, address?: string): Promise<OperationResult> => {
+      if (wirelessWizard) {
+        return await wirelessWizard.disconnectWireless(address);
+      }
+      const discRes = await adb.disconnect(address);
+      return {
+        success: discRes.success,
+        error: discRes.success ? undefined : discRes.output,
+      };
+    }
+  );
+
+  // 10. GET_RECENT_WIRELESS_DEVICES
+  ipcMain.handle(
+    DEXCONNECT_CHANNELS.GET_RECENT_WIRELESS_DEVICES,
+    async (): Promise<RecentWirelessDevice[]> => {
+      if (wirelessWizard) {
+        return wirelessWizard.getRecentDevices();
+      }
+      return [];
+    }
+  );
 }

@@ -6,6 +6,7 @@ import { getAdapters } from './factory';
 import { registerIpcHandlers } from './ipc/handlers';
 import { DeviceManager } from './services/DeviceManager';
 import { SessionLauncher } from './services/SessionLauncher';
+import { WirelessWizard } from './services/WirelessWizard';
 import { DEXCONNECT_CHANNELS } from './ipc/channels';
 import type { ActiveSession, SessionLogEntry } from '../../src/types';
 
@@ -21,6 +22,7 @@ if (!gotLock) {
 let mainWindow: BrowserWindow | null = null;
 let deviceManager: DeviceManager | null = null;
 let sessionLauncher: SessionLauncher | null = null;
+let wirelessWizard: WirelessWizard | null = null;
 
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
@@ -82,10 +84,17 @@ async function createWindow(): Promise<void> {
     });
   }
 
+  if (!wirelessWizard) {
+    wirelessWizard = new WirelessWizard(adapters.adb, {
+      deviceManager: deviceManager ?? undefined,
+    });
+  }
+
   registerIpcHandlers({
     ...adapters,
     deviceManager,
     sessionLauncher,
+    wirelessWizard,
   });
 
   // Load dev server or production bundle
@@ -113,6 +122,10 @@ app.on('before-quit', () => {
   if (sessionLauncher) {
     sessionLauncher.dispose();
     sessionLauncher = null;
+  }
+  if (wirelessWizard) {
+    wirelessWizard.dispose();
+    wirelessWizard = null;
   }
 });
 
