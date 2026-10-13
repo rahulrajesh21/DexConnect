@@ -181,7 +181,7 @@ export class DeviceManager extends EventEmitter {
     if (this.isRunning) return;
     this.isRunning = true;
     this.consecutiveErrors = 0;
-    void this.pollTick(false);
+    void this.pollTick(false).catch(() => {});
   }
 
   /**
@@ -284,6 +284,8 @@ export class DeviceManager extends EventEmitter {
     this.pollingPromise = this.executePoll(forceBattery, isManual);
     try {
       return await this.pollingPromise;
+    } catch {
+      return this.getDevices();
     } finally {
       this.pollingPromise = null;
       this.scheduleNextTick();
@@ -337,7 +339,9 @@ export class DeviceManager extends EventEmitter {
       this.consecutiveErrors = 0;
     } catch (err: unknown) {
       this.consecutiveErrors++;
-      this.emit('error', err);
+      if (this.listenerCount('error') > 0) {
+        this.emit('error', err);
+      }
     }
 
     return this.getDevices();
@@ -479,7 +483,7 @@ export class DeviceManager extends EventEmitter {
 
     this.timerId = setTimeout(() => {
       this.timerId = null;
-      void this.pollTick(false);
+      void this.pollTick(false).catch(() => {});
     }, delay);
   }
 }

@@ -519,6 +519,29 @@ describe('DeviceManager Unit Tests', () => {
 
       expect(manager.getDeviceBySerial('NON_EXISTENT')).toBeUndefined();
     });
+
+    it('does not throw or trigger unhandled rejection when ADB fails and no error listener is registered', async () => {
+      mockAdb.reset([]);
+      const adbSpy = vi.spyOn(mockAdb, 'getDevices');
+      manager = new DeviceManager(mockAdb, { pollIntervalMs: 2000, autoStart: true });
+
+      // No 'error' listener registered on manager!
+      expect(manager.listenerCount('error')).toBe(0);
+
+      // Force ADB failure during background tick
+      adbSpy.mockRejectedValueOnce(new Error('Command failed: /opt/homebrew/bin/adb devices -l'));
+
+      // Advance timers to trigger poll tick
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // Should not throw or crash; manager returns cached empty list
+      expect(manager.getDevices()).toEqual([]);
+
+      // Manual refresh also resolves safely without rejecting
+      adbSpy.mockRejectedValueOnce(new Error('Transient USB disconnect'));
+      const refreshResult = await manager.refresh();
+      expect(refreshResult).toEqual([]);
+    });
   });
 });
 

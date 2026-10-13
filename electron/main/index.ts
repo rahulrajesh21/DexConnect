@@ -19,6 +19,11 @@ if (!gotLock) {
   app.quit();
 }
 
+// Global guard against uncaught promise rejections from transient hardware commands
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Process] Caught unhandled rejection defensively:', reason);
+});
+
 let mainWindow: BrowserWindow | null = null;
 let deviceManager: DeviceManager | null = null;
 let sessionLauncher: SessionLauncher | null = null;
@@ -63,6 +68,9 @@ async function createWindow(): Promise<void> {
   const adapters = getAdapters();
   if (!deviceManager) {
     deviceManager = new DeviceManager(adapters.adb, { autoStart: true });
+    deviceManager.on('error', (err) => {
+      console.warn('[DeviceManager] Polling warning (transient ADB error, backing off):', err instanceof Error ? err.message : String(err));
+    });
     deviceManager.on('devices-updated', (devices) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(DEXCONNECT_CHANNELS.DEVICES_UPDATED, devices);
