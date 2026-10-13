@@ -74,7 +74,18 @@ async function createWindow(): Promise<void> {
     sessionLauncher = new SessionLauncher(adapters.scrcpy);
     sessionLauncher.on('session-status-changed', (session: ActiveSession) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(DEXCONNECT_CHANNELS.SESSION_STATUS_CHANGED, session);
+        const serializableSession: ActiveSession = {
+          sessionId: session.sessionId,
+          deviceSerial: session.deviceSerial,
+          profile: session.profile,
+          pid: session.pid,
+          startedAt: session.startedAt,
+          config: session.config ? { ...session.config } : session.config,
+          status: session.status,
+          ...(session.exitCode !== undefined ? { exitCode: session.exitCode } : {}),
+          ...(session.error !== undefined ? { error: session.error } : {}),
+        };
+        mainWindow.webContents.send(DEXCONNECT_CHANNELS.SESSION_STATUS_CHANGED, serializableSession);
       }
     });
     sessionLauncher.on('session-log', (logEntry: SessionLogEntry) => {

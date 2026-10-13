@@ -110,6 +110,33 @@ interface InternalSession extends ActiveSession {
   };
 }
 
+/**
+ * Strips non-serializable fields (ChildProcess, NodeJS.Timeout, RingBuffer, callbacks)
+ * to ensure objects can be cloned across Electron IPC boundaries without serialization errors.
+ */
+export function sanitizeActiveSession(session: InternalSession | ActiveSession): ActiveSession {
+  return {
+    sessionId: session.sessionId,
+    deviceSerial: session.deviceSerial,
+    profile: session.profile,
+    pid: session.pid,
+    startedAt: session.startedAt,
+    config: {
+      serial: session.config.serial,
+      profile: session.config.profile,
+      resolution: session.config.resolution,
+      dpi: session.config.dpi,
+      refreshRate: session.config.refreshRate,
+      codec: session.config.codec,
+      audioRouting: session.config.audioRouting,
+      modelName: session.config.modelName,
+    },
+    status: session.status,
+    ...(session.exitCode !== undefined ? { exitCode: session.exitCode } : {}),
+    ...(session.error !== undefined ? { error: session.error } : {}),
+  };
+}
+
 export interface SessionLauncherOptions {
   /** Maximum number of log lines preserved per session (default: 500) */
   maxLogLines?: number;
@@ -291,7 +318,7 @@ export class SessionLauncher extends EventEmitter {
     const list: ActiveSession[] = [];
     for (const session of this.sessions.values()) {
       if (session.status === 'starting' || session.status === 'running' || session.status === 'stopping') {
-        list.push(session);
+        list.push(sanitizeActiveSession(session));
       }
     }
     return list;
@@ -301,7 +328,7 @@ export class SessionLauncher extends EventEmitter {
    * Returns snapshot of all tracked sessions (including terminated).
    */
   public getAllSessions(): ActiveSession[] {
-    return Array.from(this.sessions.values());
+    return Array.from(this.sessions.values()).map(sanitizeActiveSession);
   }
 
   /**
@@ -391,9 +418,10 @@ export class SessionLauncher extends EventEmitter {
     this.removeAllListeners();
   }
 
-  private emitStatus(session: ActiveSession): void {
-    this.emit('session-status-changed', session);
-    this.emit('sessionStatusChanged', session);
+  private emitStatus(session: InternalSession | ActiveSession): void {
+    const publicSession = sanitizeActiveSession(session);
+    this.emit('session-status-changed', publicSession);
+    this.emit('sessionStatusChanged', publicSession);
   }
 
   private emitLog(entry: SessionLogEntry): void {

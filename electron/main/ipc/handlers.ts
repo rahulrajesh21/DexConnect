@@ -170,7 +170,18 @@ export function registerIpcHandlers(context: HandlerContext): void {
       if (!sessionLauncher) {
         return [];
       }
-      return sessionLauncher.getActiveSessions();
+      const sessions = sessionLauncher.getActiveSessions();
+      return sessions.map((s) => ({
+        sessionId: s.sessionId,
+        deviceSerial: s.deviceSerial,
+        profile: s.profile,
+        pid: s.pid,
+        startedAt: s.startedAt,
+        config: { ...s.config },
+        status: s.status,
+        ...(s.exitCode !== undefined ? { exitCode: s.exitCode } : {}),
+        ...(s.error !== undefined ? { error: s.error } : {}),
+      }));
     }
   );
 
