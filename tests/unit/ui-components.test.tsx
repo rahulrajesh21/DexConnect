@@ -216,6 +216,7 @@ describe('Milestone M5: macOS Glassmorphic UI Dashboard Unit Tests', () => {
           isOpen={true}
           onClose={onClose}
           onPair={onPair}
+          initialTab="manual"
         />
       );
 
@@ -240,6 +241,30 @@ describe('Milestone M5: macOS Glassmorphic UI Dashboard Unit Tests', () => {
         code: '987654',
         connectPort: 5555,
       });
+    });
+
+    it('renders QR code pairing tab and allows switching to manual PIN', async () => {
+      const onPair = vi.fn().mockResolvedValue(true);
+      const onClose = vi.fn();
+
+      render(
+        <PairingModal
+          isOpen={true}
+          onClose={onClose}
+          onPair={onPair}
+          initialTab="qr"
+        />
+      );
+
+      expect(screen.getByText('Scan QR Code')).toBeDefined();
+      expect(screen.getByText('How to pair with QR code:')).toBeDefined();
+      expect(screen.getByText('Waiting for camera scan...')).toBeDefined();
+
+      // Switch to manual tab
+      const manualTabBtn = screen.getByText('Manual 6-Digit PIN');
+      fireEvent.click(manualTabBtn);
+
+      expect(screen.getByPlaceholderText('e.g. 192.168.1.100')).toBeDefined();
     });
   });
 

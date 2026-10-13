@@ -88,6 +88,12 @@ async function createWindow(): Promise<void> {
     wirelessWizard = new WirelessWizard(adapters.adb, {
       deviceManager: deviceManager ?? undefined,
     });
+
+    wirelessWizard.on('qr-pairing-progress', (progress: any) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(DEXCONNECT_CHANNELS.QR_PAIRING_PROGRESS, progress);
+      }
+    });
   }
 
   registerIpcHandlers({

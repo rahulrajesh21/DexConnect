@@ -272,4 +272,8 @@ export class SystemAdbExecutor implements IAdbExecutor {
       return { success: false, output: err.message, error: err.message };
     }
   }
+
+  public async getMdnsServices(): Promise<AdbCommandResult> {
+    return this.executeRaw(['mdns', 'services']);
+  }
 }

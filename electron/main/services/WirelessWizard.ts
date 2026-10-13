@@ -6,11 +6,15 @@ import {
   type RecentDevice,
   type AddRecentDeviceInput,
 } from './RecentDevicesStore';
+import QRCode from 'qrcode';
 import type {
   PairWirelessPayload,
   OperationResult,
   MigrateWirelessResult,
   DeviceBrand,
+  QrPairingSession,
+  QrPairingProgress,
+  QrPairingState,
 } from '../../../src/types';
 
 export type MigrationStep =
@@ -90,6 +94,87 @@ export interface WirelessWizardOptions {
   verificationRetries?: number;
   verificationRetryDelayMs?: number;
   timeoutMs?: number;
+}
+
+export interface QrPairingOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  customServiceName?: string;
+  customPassword?: string;
+  connectPortFallback?: number;
+}
+
+export interface DiscoveredMdnsDevice {
+  ip: string;
+  port: number;
+  type: 'pairing' | 'connect';
+  rawLine: string;
+}
+
+/**
+ * Generates an AOSP / Android Studio compliant QR pairing payload.
+ * Spec: WIFI:T:ADB;S:<service_name>;P:<password>;;
+ */
+export function generateQrPairingPayload(
+  customServiceName?: string,
+  customPassword?: string
+): {
+  serviceName: string;
+  password: string;
+  payload: string;
+} {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let randSuffix = '';
+  for (let i = 0; i < 6; i++) {
+    randSuffix += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  let randId = '';
+  for (let i = 0; i < 12; i++) {
+    randId += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  const sName = customServiceName || `ADB_WIFI_${randId}-${randSuffix}`;
+  let pwd = customPassword || '';
+  if (!pwd) {
+    for (let i = 0; i < 20; i++) {
+      pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+  }
+  return {
+    serviceName: sName,
+    password: pwd,
+    payload: `WIFI:T:ADB;S:${sName};P:${pwd};;`,
+  };
+}
+
+/**
+ * Parses output from `adb mdns services` to discover active pairing and connection endpoints.
+ */
+export function parseMdnsServicesOutput(output: string): DiscoveredMdnsDevice[] {
+  const results: DiscoveredMdnsDevice[] = [];
+  if (!output || typeof output !== 'string') return results;
+  const lines = output.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const isPairing = trimmed.includes('_adb-tls-pairing._tcp');
+    const isConnect = trimmed.includes('_adb-tls-connect._tcp');
+    if (!isPairing && !isConnect) continue;
+
+    const match = trimmed.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})/);
+    if (match) {
+      const ip = match[1];
+      const port = parseInt(match[2], 10);
+      if (port >= 1 && port <= 65535) {
+        results.push({
+          ip,
+          port,
+          type: isPairing ? 'pairing' : 'connect',
+          rawLine: trimmed,
+        });
+      }
+    }
+  }
+  return results;
 }
 
 // =========================================================================
@@ -231,6 +316,14 @@ export class WirelessWizard extends EventEmitter {
   private readonly delayMs: number;
   private activeTimers: Set<NodeJS.Timeout> = new Set();
   private disposed: boolean = false;
+  private activeQrSession: {
+    sessionId: string;
+    serviceName: string;
+    password: string;
+    timer?: NodeJS.Timeout;
+    pollInterval?: NodeJS.Timeout;
+    resolved: boolean;
+  } | null = null;
 
   constructor(
     adb: IAdbExecutor,
@@ -273,6 +366,7 @@ export class WirelessWizard extends EventEmitter {
 
   public dispose(): void {
     this.disposed = true;
+    this.stopQrPairing();
     for (const timer of this.activeTimers) {
       clearTimeout(timer);
     }
@@ -838,5 +932,297 @@ export class WirelessWizard extends EventEmitter {
 
   public getRecentStore(): RecentDevicesStore {
     return this.recentStore;
+  }
+
+  // =========================================================================
+  // QR Code Pairing Workflow (Android 11+ AOSP Specification)
+  // =========================================================================
+
+  public async startQrPairing(options?: QrPairingOptions): Promise<QrPairingSession> {
+    // 1. Cancel any in-flight QR pairing session
+    if (this.activeQrSession) {
+      this.stopQrPairing();
+    }
+
+    // 2. Generate random credentials & standard payload
+    const { serviceName, password, payload } = generateQrPairingPayload(
+      options?.customServiceName,
+      options?.customPassword
+    );
+
+    // 3. Render base64 PNG Data URL
+    const qrDataUrl = await QRCode.toDataURL(payload, {
+      width: 320,
+      margin: 2,
+      color: {
+        dark: '#000000',
+        light: '#ffffff',
+      },
+    });
+
+    const timeoutMs = options?.timeoutMs ?? 60000;
+    const pollIntervalMs = options?.pollIntervalMs ?? 1000;
+    const sessionId = `qr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const expiresAt = Date.now() + timeoutMs;
+
+    const sessionInfo: QrPairingSession = {
+      sessionId,
+      serviceName,
+      password,
+      qrPayload: payload,
+      qrDataUrl,
+      expiresAt,
+    };
+
+    const sessionState = {
+      sessionId,
+      serviceName,
+      password,
+      resolved: false,
+      timer: undefined as NodeJS.Timeout | undefined,
+      pollInterval: undefined as NodeJS.Timeout | undefined,
+    };
+
+    this.activeQrSession = sessionState;
+
+    const emitProgress = (progress: QrPairingProgress) => {
+      this.emit('qr-pairing-progress', progress);
+      this.emit('qrPairingProgress', progress);
+    };
+
+    // 4. Initial state notification
+    emitProgress({
+      sessionId,
+      state: 'waiting_for_scan',
+      serviceName,
+    });
+
+    // 5. Setup timeout timer
+    sessionState.timer = setTimeout(() => {
+      if (!sessionState.resolved) {
+        sessionState.resolved = true;
+        if (sessionState.pollInterval) clearInterval(sessionState.pollInterval);
+        emitProgress({
+          sessionId,
+          state: 'timeout',
+          serviceName,
+          error: 'QR pairing session timed out after waiting for device scan.',
+        });
+        if (this.activeQrSession?.sessionId === sessionId) {
+          this.activeQrSession = null;
+        }
+      }
+    }, timeoutMs);
+    this.activeTimers.add(sessionState.timer);
+
+    // 6. Discovery loop via `adb mdns services`
+    sessionState.pollInterval = setInterval(async () => {
+      if (sessionState.resolved || this.disposed) {
+        if (sessionState.pollInterval) clearInterval(sessionState.pollInterval);
+        return;
+      }
+
+      try {
+        let mdnsOutput = '';
+        if (typeof this.adb.getMdnsServices === 'function') {
+          const res = await this.adb.getMdnsServices();
+          mdnsOutput = res.output;
+        } else if (typeof this.adb.executeRaw === 'function') {
+          const res = await this.adb.executeRaw(['mdns', 'services']);
+          mdnsOutput = res.output;
+        }
+
+        const discovered = parseMdnsServicesOutput(mdnsOutput);
+        const pairingTarget = discovered.find((d) => d.type === 'pairing');
+
+        if (pairingTarget && !sessionState.resolved) {
+          sessionState.resolved = true;
+          if (sessionState.pollInterval) clearInterval(sessionState.pollInterval);
+          if (sessionState.timer) {
+            clearTimeout(sessionState.timer);
+            this.activeTimers.delete(sessionState.timer);
+          }
+
+          const { ip, port: pairPort } = pairingTarget;
+
+          emitProgress({
+            sessionId,
+            state: 'device_spotted',
+            serviceName,
+            ip,
+            pairingPort: pairPort,
+          });
+
+          emitProgress({
+            sessionId,
+            state: 'pairing',
+            serviceName,
+            ip,
+            pairingPort: pairPort,
+          });
+
+          // Execute pairing
+          const pairTargetStr = formatDeviceAddress(ip, pairPort);
+          const pairRes = await this.adb.pair(pairTargetStr, password);
+          const pairLower = (pairRes.output || '').toLowerCase();
+          const isPairSuccess = pairRes.success && pairLower.includes('successfully paired');
+
+          if (!isPairSuccess) {
+            const err = pairRes.output || 'Pairing handshake failed';
+            emitProgress({
+              sessionId,
+              state: 'error',
+              serviceName,
+              ip,
+              pairingPort: pairPort,
+              error: err,
+            });
+            if (this.activeQrSession?.sessionId === sessionId) {
+              this.activeQrSession = null;
+            }
+            return;
+          }
+
+          // Discover connect port or fallback
+          let connectPort = options?.connectPortFallback ?? 5555;
+          const connectMatch = discovered.find((d) => d.type === 'connect' && d.ip === ip);
+          if (connectMatch) {
+            connectPort = connectMatch.port;
+          } else {
+            // Check secondary discovery
+            try {
+              await new Promise((r) => setTimeout(r, 600));
+              let secondaryOutput = '';
+              if (typeof this.adb.getMdnsServices === 'function') {
+                const sRes = await this.adb.getMdnsServices();
+                secondaryOutput = sRes.output;
+              } else if (typeof this.adb.executeRaw === 'function') {
+                const sRes = await this.adb.executeRaw(['mdns', 'services']);
+                secondaryOutput = sRes.output;
+              }
+              const secondDiscovered = parseMdnsServicesOutput(secondaryOutput);
+              const secondConnect = secondDiscovered.find((d) => d.type === 'connect' && d.ip === ip);
+              if (secondConnect) {
+                connectPort = secondConnect.port;
+              }
+            } catch {
+              // Fallback
+            }
+          }
+
+          emitProgress({
+            sessionId,
+            state: 'connecting',
+            serviceName,
+            ip,
+            connectPort,
+          });
+
+          const connTarget = formatDeviceAddress(ip, connectPort);
+          const connRes = await this.adb.connect(connTarget);
+          const parsedConn = parseConnectOutput(connRes.output);
+
+          if (!connRes.success || !parsedConn.success) {
+            const err = connRes.output || parsedConn.reason || 'Failed to establish wireless connection';
+            emitProgress({
+              sessionId,
+              state: 'error',
+              serviceName,
+              ip,
+              connectPort,
+              error: err,
+            });
+            if (this.activeQrSession?.sessionId === sessionId) {
+              this.activeQrSession = null;
+            }
+            return;
+          }
+
+          // Retrieve properties for Recent Store
+          let brand: DeviceBrand = 'generic';
+          let modelName = connTarget;
+          try {
+            const [mfg, mdl] = await Promise.all([
+              this.adb.getProp(connTarget, 'ro.product.manufacturer').catch(() => ''),
+              this.adb.getProp(connTarget, 'ro.product.model').catch(() => ''),
+            ]);
+            if (mfg.toLowerCase().includes('samsung')) brand = 'samsung';
+            else if (mfg.toLowerCase().includes('motorola')) brand = 'motorola';
+            if (mdl) modelName = mdl;
+          } catch {
+            // Fallback
+          }
+
+          const savedDevice = this.recentStore.addRecentDevice({
+            ip,
+            port: connectPort,
+            name: modelName,
+            brand,
+          });
+
+          if (this.deviceManager) {
+            void this.deviceManager.refresh().catch(() => {});
+          }
+
+          this.emit('recent-devices-changed', this.recentStore.getRecentDevices());
+
+          emitProgress({
+            sessionId,
+            state: 'completed',
+            serviceName,
+            ip,
+            connectPort,
+            device: savedDevice,
+          });
+
+          if (this.activeQrSession?.sessionId === sessionId) {
+            this.activeQrSession = null;
+          }
+        }
+      } catch {
+        // Continue polling until timeout
+      }
+    }, pollIntervalMs);
+
+    return sessionInfo;
+  }
+
+  public stopQrPairing(sessionId?: string): void {
+    if (this.activeQrSession) {
+      if (sessionId && this.activeQrSession.sessionId !== sessionId) {
+        return;
+      }
+      this.activeQrSession.resolved = true;
+      if (this.activeQrSession.pollInterval) {
+        clearInterval(this.activeQrSession.pollInterval);
+      }
+      if (this.activeQrSession.timer) {
+        clearTimeout(this.activeQrSession.timer);
+        this.activeTimers.delete(this.activeQrSession.timer);
+      }
+
+      const cancelledProgress: QrPairingProgress = {
+        sessionId: this.activeQrSession.sessionId,
+        state: 'cancelled',
+        serviceName: this.activeQrSession.serviceName,
+      };
+
+      this.emit('qr-pairing-progress', cancelledProgress);
+      this.emit('qrPairingProgress', cancelledProgress);
+
+      this.activeQrSession = null;
+    }
+  }
+
+  public getActiveQrSession(): QrPairingSession | null {
+    if (!this.activeQrSession) return null;
+    return {
+      sessionId: this.activeQrSession.sessionId,
+      serviceName: this.activeQrSession.serviceName,
+      password: this.activeQrSession.password,
+      qrPayload: `WIFI:T:ADB;S:${this.activeQrSession.serviceName};P:${this.activeQrSession.password};;`,
+      qrDataUrl: '',
+      expiresAt: 0,
+    };
   }
 }

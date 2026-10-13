@@ -122,6 +122,39 @@ export interface MigrateWirelessResult {
   error?: string;
 }
 
+// --- QR Code Pairing ---
+
+export interface QrPairingSession {
+  sessionId: string;
+  serviceName: string;
+  password: string;
+  qrPayload: string;
+  qrDataUrl: string;
+  expiresAt: number;
+}
+
+export type QrPairingState =
+  | 'idle'
+  | 'waiting_for_scan'
+  | 'device_spotted'
+  | 'pairing'
+  | 'connecting'
+  | 'completed'
+  | 'error'
+  | 'cancelled'
+  | 'timeout';
+
+export interface QrPairingProgress {
+  sessionId: string;
+  state: QrPairingState;
+  serviceName: string;
+  ip?: string;
+  pairingPort?: number;
+  connectPort?: number;
+  error?: string;
+  device?: RecentWirelessDevice;
+}
+
 // --- Preload Bridge Interface ---
 
 export interface IDexConnectAPI {
@@ -137,9 +170,12 @@ export interface IDexConnectAPI {
   migrateToWireless: (serial: string) => Promise<MigrateWirelessResult>;
   pairWirelessDevice: (payload: PairWirelessPayload) => Promise<OperationResult>;
   connectWirelessDevice: (address: string) => Promise<OperationResult>;
+  startQrPairing?: (options?: any) => Promise<QrPairingSession>;
+  stopQrPairing?: (sessionId?: string) => Promise<OperationResult>;
 
   // Subscriptions with Cleanup Callbacks
   onDevicesUpdated: (callback: (devices: DeviceInfo[]) => void) => () => void;
   onSessionStatusChanged: (callback: (session: ActiveSession) => void) => () => void;
   onSessionLog: (callback: (log: SessionLogEntry) => void) => () => void;
+  onQrPairingProgress?: (callback: (progress: QrPairingProgress) => void) => () => void;
 }

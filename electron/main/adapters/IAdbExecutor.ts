@@ -93,4 +93,9 @@ export interface IAdbExecutor {
    * Executes a raw ADB command with arguments (optional utility)
    */
   executeRaw?(args: string[]): Promise<AdbCommandResult>;
+
+  /**
+   * Queries discovered mDNS services via `adb mdns services`
+   */
+  getMdnsServices?(): Promise<AdbCommandResult>;
 }

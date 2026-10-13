@@ -49,6 +49,7 @@ Every feature from user requirements and survey discovery is cataloged and assig
 | 27 | Active Session Status Bar & Drawer UI | Status bar showing running session, duration, PID, stop button, and log drawer | M5 | ORIGINAL_REQUEST §R1, §R3 |
 | 28 | Comprehensive E2E Test Suite (Tiers 1-4) | 100% pass of requirement-driven opaque-box E2E test suite | M6 | ORIGINAL_REQUEST §Acceptance |
 | 29 | Adversarial Coverage Hardening (Tier 5) | White-box adversarial testing, edge case resilience, process cleanup validation | M6 | Project Pattern §Phase 2 |
+| 30 | QR Code Wireless Debugging Pairing | Pair Android 11+ via AOSP `WIFI:T:ADB` QR Code, background mDNS auto-discovery, base64 QR generation, and dual-tab modal UI | `feature/qr-code-pairing` | User Request |
 
 ---
 

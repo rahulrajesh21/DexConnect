@@ -12,6 +12,8 @@ import type {
   RecentWirelessDevice,
   SessionLogEntry,
   IDexConnectAPI,
+  QrPairingSession,
+  QrPairingProgress,
 } from '../../src/types';
 
 export const dexconnectAPI: IDexConnectAPI = {
@@ -54,6 +56,14 @@ export const dexconnectAPI: IDexConnectAPI = {
     return ipcRenderer.invoke(DEXCONNECT_CHANNELS.GET_RECENT_WIRELESS_DEVICES);
   },
 
+  startQrPairing: (options?: any): Promise<QrPairingSession> => {
+    return ipcRenderer.invoke(DEXCONNECT_CHANNELS.START_QR_PAIRING, options);
+  },
+
+  stopQrPairing: (sessionId?: string): Promise<OperationResult> => {
+    return ipcRenderer.invoke(DEXCONNECT_CHANNELS.STOP_QR_PAIRING, sessionId);
+  },
+
   // Event Subscriptions with Teardown Handlers
   onDevicesUpdated: (callback: (devices: DeviceInfo[]) => void): (() => void) => {
     const handler = (_event: IpcRendererEvent, devices: DeviceInfo[]) => {
@@ -82,6 +92,16 @@ export const dexconnectAPI: IDexConnectAPI = {
     ipcRenderer.on(DEXCONNECT_CHANNELS.SESSION_LOG, handler);
     return () => {
       ipcRenderer.removeListener(DEXCONNECT_CHANNELS.SESSION_LOG, handler);
+    };
+  },
+
+  onQrPairingProgress: (callback: (progress: QrPairingProgress) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, progress: QrPairingProgress) => {
+      callback(progress);
+    };
+    ipcRenderer.on(DEXCONNECT_CHANNELS.QR_PAIRING_PROGRESS, handler);
+    return () => {
+      ipcRenderer.removeListener(DEXCONNECT_CHANNELS.QR_PAIRING_PROGRESS, handler);
     };
   },
 };

@@ -103,6 +103,8 @@ export class MockAdbExecutor implements IAdbExecutor {
   public simulateDaemonStartBanner = false;
   public simulateCorruptedBattery = false;
   public simulateCorruptedGetprop = false;
+  private customMdnsOutput: string | null = null;
+  private mdnsDevices: Map<string, { pairPort: number; connectPort: number; serviceName: string }> = new Map();
 
   constructor(initialDevices?: MockDeviceState[]) {
     this.reset(initialDevices);
@@ -114,6 +116,8 @@ export class MockAdbExecutor implements IAdbExecutor {
   public reset(initialDevices = DEFAULT_MOCK_DEVICES): void {
     this.devices.clear();
     this.pairedIps.clear();
+    this.mdnsDevices.clear();
+    this.customMdnsOutput = null;
     this.commandHistory = [];
     this.simulateConnectFailure = false;
     this.simulateDaemonStartBanner = false;
@@ -198,7 +202,7 @@ export class MockAdbExecutor implements IAdbExecutor {
       (d) => d.ipAddress === targetIp
     );
 
-    if (matchingDevice) {
+    if (matchingDevice || this.mdnsDevices.has(targetIp)) {
       const newWifiSerial = targetAddress;
       const wifiDevice: MockDeviceState = {
         raw: {
@@ -253,8 +257,9 @@ export class MockAdbExecutor implements IAdbExecutor {
   }
 
   public async pair(addressWithPort: string, code: string): Promise<AdbCommandResult> {
-    // 6-digit numeric validation rule
-    if (!/^\d{6}$/.test(code) || code === '000000') {
+    const is6DigitPin = /^\d{6}$/.test(code) && code !== '000000';
+    const isQrPassword = typeof code === 'string' && /^[A-Za-z0-9]{16,}$/.test(code) && code !== 'FAIL_PASSWORD';
+    if (!is6DigitPin && !isQrPassword) {
       return {
         success: false,
         output: 'Failed: Wrong password or connection closed.',
@@ -268,8 +273,51 @@ export class MockAdbExecutor implements IAdbExecutor {
     };
   }
 
+  public getMdnsServicesString(): string {
+    if (this.customMdnsOutput !== null) {
+      return this.customMdnsOutput;
+    }
+    const lines: string[] = ['List of discovered mdns services'];
+    for (const [ip, info] of this.mdnsDevices.entries()) {
+      if (info.pairPort) {
+        lines.push(`${info.serviceName}._adb-tls-pairing._tcp.    _adb-tls-pairing._tcp.    ${ip}:${info.pairPort}`);
+      }
+      if (info.connectPort) {
+        lines.push(`${info.serviceName}._adb-tls-connect._tcp.    _adb-tls-connect._tcp.    ${ip}:${info.connectPort}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  public async getMdnsServices(): Promise<AdbCommandResult> {
+    return {
+      success: true,
+      output: this.getMdnsServicesString(),
+    };
+  }
+
   public async executeRaw(args: string[]): Promise<AdbCommandResult> {
+    if (args[0] === 'mdns' && args[1] === 'services') {
+      return this.getMdnsServices();
+    }
     return { success: true, output: `mock executed: adb ${args.join(' ')}` };
+  }
+
+  public setMdnsServicesOutput(output: string | null): void {
+    this.customMdnsOutput = output;
+  }
+
+  public simulateMdnsPairingDevice(
+    ip: string,
+    pairPort: number,
+    connectPort = 5555,
+    serviceName = 'adb-mock-device'
+  ): void {
+    this.mdnsDevices.set(ip, { pairPort, connectPort, serviceName });
+  }
+
+  public simulateMdnsRemove(ip: string): void {
+    this.mdnsDevices.delete(ip);
   }
 
   // --- Test & Dynamic Simulation Hooks ---

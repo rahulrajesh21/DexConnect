@@ -16,6 +16,7 @@ import type {
   RecentWirelessDevice,
   SystemStatus,
   BatteryInfo,
+  QrPairingSession,
 } from '../../../src/types';
 
 export interface HandlerContext {
@@ -51,6 +52,8 @@ export function registerIpcHandlers(context: HandlerContext): void {
     DEXCONNECT_CHANNELS.CONNECT_WIRELESS_DEVICE,
     DEXCONNECT_CHANNELS.DISCONNECT_WIRELESS,
     DEXCONNECT_CHANNELS.GET_RECENT_WIRELESS_DEVICES,
+    DEXCONNECT_CHANNELS.START_QR_PAIRING,
+    DEXCONNECT_CHANNELS.STOP_QR_PAIRING,
   ];
 
   for (const channel of channels) {
@@ -280,6 +283,29 @@ export function registerIpcHandlers(context: HandlerContext): void {
         return wirelessWizard.getRecentDevices();
       }
       return [];
+    }
+  );
+
+  // 11. START_QR_PAIRING
+  ipcMain.handle(
+    DEXCONNECT_CHANNELS.START_QR_PAIRING,
+    async (_event, options?: any): Promise<QrPairingSession> => {
+      if (!wirelessWizard) {
+        throw new Error('WirelessWizard service is not initialized');
+      }
+      return await wirelessWizard.startQrPairing(options);
+    }
+  );
+
+  // 12. STOP_QR_PAIRING
+  ipcMain.handle(
+    DEXCONNECT_CHANNELS.STOP_QR_PAIRING,
+    async (_event, sessionId?: string): Promise<OperationResult> => {
+      if (!wirelessWizard) {
+        return { success: false, error: 'WirelessWizard service is not initialized' };
+      }
+      wirelessWizard.stopQrPairing(sessionId);
+      return { success: true };
     }
   );
 }
