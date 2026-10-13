@@ -59,7 +59,7 @@ Every feature from user requirements and survey discovery is cataloged and assig
 | M1 | Core Scaffolding, Toolchain & Adapters | Electron + Vite + React + TS + Tailwind setup, `IAdbExecutor`, `IScrcpyProcessRunner`, Mock/System adapters, IPC channels, build verification | none | DONE |
 | M2 | Device Detection & Lifecycle Management | `DeviceManager` service, ADB polling, manufacturer detection, model/OS extraction, battery parsing, connection type, IPC streaming | M1 | DONE |
 | M3 | Session Launcher & Scrcpy Manager | `SessionLauncher` service, profile arg builders (DeX, Ready For, Desktop, Mirror), PID supervisor, UHID/audio flags, log streamer, session IPC | M1 | DONE |
-| M4 | Wireless Migration & Pairing Wizard | `WirelessWizard` service, USB-to-Wi-Fi switch (`adb tcpip 5555`), Android 11+ pairing (`adb pair`), device history store, IPC handlers | M1, M2 | PLANNED |
+| M4 | Wireless Migration & Pairing Wizard | `WirelessWizard` service, USB-to-Wi-Fi switch (`adb tcpip 5555`), Android 11+ pairing (`adb pair`), device history store, IPC handlers | M1, M2 | DONE |
 | M5 | macOS Glassmorphic UI Dashboard | React components: Titlebar, DeviceList/Cards, 4 Launch Cards, QuickControls dock, Pairing Modal, SessionStatusBar, LogViewer, IPC hooks integration | M1, M2, M3, M4 | PLANNED |
 | M6 | Final Milestone: 100% E2E Pass & Adversarial Hardening | Phase 1: Pass 100% E2E Test Suite (Tiers 1-4 from TEST_READY.md). Phase 2: Tier 5 Adversarial Coverage Hardening | M1, M2, M3, M4, M5, E2E Track | PLANNED |
 
